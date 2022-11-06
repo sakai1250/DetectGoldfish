@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-# 200442066_坂井泰吾_画像分類-2.ipynb
 
 
 import os
