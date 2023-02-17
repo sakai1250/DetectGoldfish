@@ -16,7 +16,6 @@ import cv2                          # mean,stdの算出
 import pandas as pd
 import numpy as np                  # gragh
 import matplotlib.pyplot as plt
-# %matplotlib inline
 import time
 
 
