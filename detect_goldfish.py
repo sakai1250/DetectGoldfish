@@ -12,8 +12,6 @@ import torch.optim as optim
 from torchvision import transforms
 import torchvision.models as models 
 
-import cv2
-import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import time
@@ -27,19 +25,18 @@ def make_filepath_list():
     train_file_list = []
     valid_file_list = []
 
-    imagedir = '/Users/sakaitaigoware/Documents/pytorch/fish_images/'
+    imagedir = 'fish_images/'
 
     for top_dir in os.listdir(imagedir):
-        file_dir = os.path.join(imagedir, top_dir)
-        file_list = os.listdir(file_dir)
+        file_list = os.listdir(os.path.join(imagedir, top_dir))
 
         # 学習データ40,検証データ10とする
         num_data = len(file_list)
         num_split = int(num_data - 10)
 
         # 以下で'\\'を'/'にreplaceしているのはWindowsでのpath出力に対応するため
-        train_file_list += [os.path.join(imagedir, top_dir, file).replace('\\', '/') for file in file_list[:num_split]]
-        valid_file_list += [os.path.join(imagedir, top_dir, file).replace('\\', '/') for file in file_list[num_split:]]
+        train_file_list += [os.path.join(imagedir, top_dir, file) for file in file_list[:num_split]]
+        valid_file_list += [os.path.join(imagedir, top_dir, file) for file in file_list[num_split:]]
     
     return train_file_list, valid_file_list
 
@@ -57,20 +54,20 @@ class ImageTransform(object):
         # 辞書型でMethodを定義
         self.data_trasnform = {
             'train': transforms.Compose([
+                # Tensor型に変換する
+                transforms.ToTensor(),
                 # データオーグメンテーション
                 transforms.RandomHorizontalFlip(),
                 # 画像をresize×resizeの大きさに統一する
                 transforms.Resize((resize, resize)),
-                # Tensor型に変換する
-                transforms.ToTensor(),
                 # 色情報の標準化をする
                 transforms.Normalize(mean, std)
             ]),
             'valid': transforms.Compose([
-                # 画像をresize×resizeの大きさに統一する
-                transforms.Resize((resize, resize)),
                 # Tensor型に変換する
                 transforms.ToTensor(),
+                # 画像をresize×resizeの大きさに統一する
+                transforms.Resize((resize, resize)),
                 # 色情報の標準化をする
                 transforms.Normalize(mean, std)
             ])
@@ -115,14 +112,55 @@ class Dataset(data.Dataset):
         img_transformed = self.transform(img, self.phase)
         
         # 画像ラベルをファイル名から抜き出す
-        # /Users/sakaitaigoware/Documents/pytorch/fish_images/の後ろの文字列を抜き出す
-        label = self.file_list[index].split('/')[6][:] # '/'で分けた5番目
-
+        # fish_images/の後ろの文字列を抜き出す
+        label = self.file_list[index].split('/')[1][:] # '/'で分けた2番目
+        
         # ラベル名を数値に変換
         label = self.classes.index(label)
-        
         return img_transformed, label
+def detect(num, idir):
+    # フォルダ内のファイルを取得
+    file_list = os.listdir(idir)
 
+    # 画像ファイルのみを抽出
+    image_files = [file for file in file_list if file.endswith(('.jpg', '.jpeg', '.png'))]
+
+    # 画像を順に読み込む
+    for image_file in image_files:
+        image_path = os.path.join(idir, image_file)
+        image = Image.open(image_path).convert('RGB')
+        
+        transform=ImageTransform(resize, mean, std)
+        try:
+            img_valid = transform(image, 'train')
+        except RuntimeError:
+            print("error")
+            continue
+
+        # 予測
+        net.eval()
+        img_valid = img_valid.unsqueeze(0).to(device)
+        out = net(img_valid)
+        # ラベルを求める
+        _, preds = torch.max(out, 1)
+    # 予測結果を、画像とともに保存
+        plt.imshow(image)
+        plt.title("predict:{}".format(myclasses[preds]))
+        # resultディレクトリがなければ作成
+        if not os.path.isdir('result{}'.format(num)):
+            os.mkdir('result{}'.format(num))
+        plt.savefig('result{}/{}.jpg'.format(num, image_file))
+        plt.close()
+        
+class Model(nn.Module):
+    def __init__(self):
+        super(Model, self).__init__()
+        self.model = models.alexnet(pretrained=True)
+        self.fc = nn.Linear(1000, 2)
+    def forward(self, x):
+        x = self.model(x)
+        x = self.fc(x)
+        return torch.sigmoid(x)
 
 if __name__ == '__main__':
 
@@ -141,7 +179,7 @@ if __name__ == '__main__':
     ]
 
     # リサイズ先の画像サイズ
-    resize = 300
+    resize = 256
 
     # mean = (0.549, 0.494, 0.44)
     # std = (0.262, 0.239, 0.246)
@@ -150,7 +188,7 @@ if __name__ == '__main__':
     std = (0.262, 0.239, 0.246)
 
     # バッチサイズの指定
-    batch_size = 10  
+    batch_size = 2
 
     # エポック数
     num_epochs = 1
@@ -162,6 +200,7 @@ if __name__ == '__main__':
     # 2. 前処理
     # 学習データ、検証データのファイルパスを格納したリストを取得する
     train_file_list, valid_file_list = make_filepath_list()
+
     # 3. Datasetの作成
     train_dataset = Dataset(
         file_list=train_file_list, classes=myclasses,
@@ -183,10 +222,9 @@ if __name__ == '__main__':
         'train': train_dataloader, 
         'valid': valid_dataloader
     }
-    # 5. ネットワークの定義
-    net = models.alexnet(pretrained = True)
-    net.fc = nn.Linear(in_features=4096, out_features=2)
-    net = net.to(device)                    
+    
+    # 5. ネットワークの定義    
+    net = Model().to(device)
     # 6. 損失関数の定義
     criterion = nn.CrossEntropyLoss()
     # 7. 最適化手法の定義
@@ -223,7 +261,6 @@ if __name__ == '__main__':
                 with torch.set_grad_enabled(phase == 'train'):
                     
                     outputs = net(inputs)
-                    
                     # 損失を計算
                     loss = criterion(outputs, labels)
                     
@@ -257,14 +294,6 @@ if __name__ == '__main__':
         time_end = time.time()
         print('\nElapsed time: {:.3f} sec'.format(time_end - time_start))
 
-    # 5 epoch 
-    x = np.arange(1, num_epochs + 1, 1)
-    plt.figure(figsize=(9,8))
-    plt.plot(x, epoch_losses, label = "Loss")
-    plt.plot(x, epoch_accs, linestyle="--", label = "Accracy")
-    plt.legend()
-    plt.show()
-
     # モデルを保存、確認
     PATH = './alex_net.pth'
     torch.save(net, PATH)
@@ -272,40 +301,12 @@ if __name__ == '__main__':
     net.eval()
 
     # 動作確認
-    num_photo = 50
 
-    idir_1 = '/Users/sakaitaigoware/Documents/pytorch/fish_images/fish/'
-    idir_2 = '/Users/sakaitaigoware/Documents/pytorch/fish_images/goldfish/'
-    def detect(num, idir):
-        for k in range(num): 
-            if k < 9:
-                img = cv2.imread(idir + "0000" + str(k+1) + '.jpg')
-                print(idir + "0000" + str(k+1) + '.jpg')
-                img = Image.open(idir + "0000" + str(k+1) + '.jpg')
-            else:
-                img = cv2.imread(idir + "000" + str(k+1) + '.jpg')
-                print(idir + "000" + str(k+1) + '.jpg')
-                img = Image.open(idir + "000" + str(k+1) + '.jpg')
-
-            transform=ImageTransform(resize, mean, std)
-            try:
-                img_valid = transform(img, 'train')
-            except RuntimeError:
-                print("error")
-                continue
-            # plt.imshow(img)
-            # plt.show()
-
-            net.eval()
-            img_valid = img_valid.unsqueeze(0).to(device)
-            out = net(img_valid)
-            # ラベルを求める
-            _, preds = torch.max(out, 1)
-
-
-            print('Predicted label:', myclasses[preds.item()])
+    idir_1 = 'fish_images/fish/'
+    idir_2 = 'fish_images/goldfish/'
             
     #関数
-    detect(num_photo, idir_1)
-    detect(num_photo, idir_2)
+    detect(1, idir_1)
+    print("detect(1, idir_1) is done")
+    detect(2, idir_2)
 
